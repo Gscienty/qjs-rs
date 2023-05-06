@@ -395,14 +395,19 @@ impl<'s> Lexer<'s> {
         Ok(())
     }
 
-    /// 解析 IdentifierName
+    /// 解析 IdentifierName，若解析出的结果为关键字，则转换为对应的关键字 Token
     ///
     /// # Returns
     /// 返回 IdentifierName Token
     fn parse_identifier_name(&mut self) -> LexerResult {
         self.parse_identifier_name_part()?;
 
-        Ok(Token::IdentifierName(self.get_tokenbuf()))
+        let token = self.get_tokenbuf();
+
+        Ok(match token.as_str() {
+            "await" => Token::EOF,
+            _ => Token::IdentifierName(token),
+        })
     }
 
     /// 解析 PrivateIdentifier
@@ -443,10 +448,18 @@ impl<'s> Lexer<'s> {
                     continue;
                 }
 
-                // 注释
-                Some('/') if matches!(self.lookahead(), Some('*' | '/')) => {
-                    return self.parse_comment();
-                }
+                // 注释 || 除法
+                Some('/') => match self.lookahead() {
+                    Some('*' | '/') => return self.parse_comment(),
+                    Some('=') => {
+                        self.next(2);
+                        return Ok(Token::DivAssignOp);
+                    }
+                    _ => {
+                        self.next(1);
+                        return Ok(Token::DivOp);
+                    }
+                },
 
                 Some('#') => match self.lookahead() {
                     // Hashbang Comment
@@ -467,7 +480,7 @@ impl<'s> Lexer<'s> {
                     }
                 },
 
-                // IdentifierName
+                // IdentifierName || ReservedWord
                 Some(chr) if matches!(chr, '$' | '_') || code_points::is_id_start(chr) => {
                     return self.parse_identifier_name();
                 }
