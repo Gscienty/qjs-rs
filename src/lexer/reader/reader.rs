@@ -1,4 +1,4 @@
-use std::isize;
+use std::{iter::Skip, str::Chars};
 
 /// 读取 EMCAScript 源码
 ///
@@ -8,13 +8,26 @@ use std::isize;
 /// 词法分析器仅通过 SourceReader 读取对应的源码字符。
 pub(crate) trait SourceReader {
     /// 将源码游标向下移动一个字符
-    fn next(&mut self);
+    ///
+    /// # Arguments
+    /// * `off` - 游标移动偏移量
+    fn next(&mut self, off: isize);
 
     /// 以当前游标基准，读取偏移量为 `off` 的字符
     ///
     /// # Arguments
-    /// * `off` - 读取偏移量
+    /// * `reader_fn` - 读取字符的回调函数
+    fn read(&self, reader_fn: &mut dyn FnMut(Skip<Chars>));
+
+    /// 获取当前游标指向的字符
+    ///
     /// # Returns
-    /// 返回以游标为基准，偏移量为 `off` 的字符
-    fn read(&self, off: isize) -> Option<char>;
+    /// 返回当前游标指向的字符
+    fn current(&self) -> Option<char>;
+
+    /// 获取当前游标指向的下一个字符
+    ///
+    /// # Returns
+    /// 返回当前游标指向的下一个字符
+    fn lookahead(&self) -> Option<char>;
 }

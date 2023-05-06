@@ -2,5 +2,9 @@
 pub(crate) enum Token {
     EOF,
 
-    Comment,
+    Comment(String),
+    HashbangComment(String),
+
+    IdentifierName(String),
+    PrivateIdentifier(String),
 }

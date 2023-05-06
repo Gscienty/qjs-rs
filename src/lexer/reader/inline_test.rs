@@ -7,10 +7,11 @@ fn test_InlineSourceReader_next() {
             print("Hello World");
         }"#,
     );
+    reader.next(1);
+    assert_eq!(reader.current(), Some('f'));
+    assert_eq!(reader.lookahead(), Some('u'));
 
-    reader.next();
-
-    assert_eq!(reader.read(-1), None);
-    assert_eq!(reader.read(0), Some('f'));
-    assert_eq!(reader.read(1), Some('u'))
+    reader.next(2);
+    assert_eq!(reader.current(), Some('n'));
+    assert_eq!(reader.lookahead(), Some('c'));
 }

@@ -1,58 +1,70 @@
+use std::{iter::Skip, str::Chars};
+
 use super::reader;
 
 /// 读取在 Rust 代码内写 EMCAScript 源码
-pub(crate) struct InlineSourceReader {
+pub(crate) struct InlineSourceReader<'s> {
     source: String,
+    source_chars: Chars<'s>,
+
+    current_chr: Option<char>,
+    lookahead_chr: Option<char>,
 
     read_off: isize,
-    current: Option<char>,
-    lookahead: Option<char>,
 }
 
-impl InlineSourceReader {
+impl<'s> InlineSourceReader<'s> {
     /// 构造一个读取 Rust 代码内写 EMCAScript 源码的 SourceReader
     ///
     /// # Arguments
     /// `source` - JavaScript 源码
     /// # Returns
     /// SourceReader 的一个实现
-    pub(super) fn new(source: &str) -> Self {
+    pub(crate) fn new(source: &'s str) -> Self {
         InlineSourceReader {
             source: String::from(source),
+            source_chars: source.chars(),
+
+            current_chr: None,
+            lookahead_chr: None,
 
             read_off: -1,
-            current: None,
-            lookahead: None,
         }
     }
 }
 
-impl reader::SourceReader for InlineSourceReader {
+impl<'s> reader::SourceReader for InlineSourceReader<'s> {
     #[inline(always)]
-    fn next(&mut self) {
-        self.read_off += 1;
+    fn next(&mut self, off: isize) {
+        self.read_off += off;
 
-        let off = self.read_off as usize;
-        let mut chars = self.source[off..].chars();
-        self.current = chars.next();
-        self.lookahead = chars.next();
+        for _ in 0..off {
+            if self.lookahead_chr.is_some() {
+                self.current_chr = self.lookahead_chr;
+                self.lookahead_chr = None;
+                continue;
+            }
+            self.current_chr = self.source_chars.next();
+        }
+
+        self.lookahead_chr = self.source_chars.next();
     }
 
     #[inline(always)]
-    fn read(&self, off: isize) -> Option<char> {
-        if off == 0 {
-            return self.current;
-        }
-        if off == 1 && self.lookahead.is_some() {
-            return self.lookahead;
-        }
+    fn current(&self) -> Option<char> {
+        self.current_chr
+    }
 
-        let off = self.read_off + off;
-        if off < 0 || self.source.len() <= off as usize {
-            return None;
-        }
-        let off = off as usize;
+    #[inline(always)]
+    fn lookahead(&self) -> Option<char> {
+        self.lookahead_chr
+    }
 
-        self.source[off..].chars().next()
+    #[inline(always)]
+    fn read(&self, reader_fn: &mut dyn FnMut(Skip<Chars>)) {
+        if self.read_off < 0 {
+            return;
+        }
+        reader_fn(self.source_chars.clone().skip(self.read_off as usize))
     }
 }
