@@ -683,6 +683,10 @@ impl<'s> Lexer<'s> {
         Ok(Token::Number(self.get_tokenbuf()))
     }
 
+    fn parse_string(&mut self) -> LexerResult {
+        panic!("not implemented")
+    }
+
     /// 从 EMCAScript 源码的当前游标起进行扫描，获取下一个 Token
     ///
     /// # Returns
@@ -868,6 +872,8 @@ impl<'s> Lexer<'s> {
                     self.next(2);
                     return Ok(Token::ModAssign);
                 }
+
+                Some('"' | '\'') => return self.parse_string(),
 
                 // 换行
                 Some(chr) if code_points::is_line_terminator(chr) => {

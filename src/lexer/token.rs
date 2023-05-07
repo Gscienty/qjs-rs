@@ -82,4 +82,5 @@ pub(crate) enum Token {
     ModAssign,
     Operator(char),
     Number(String),
+    Str(String),
 }
