@@ -1,5 +1,3 @@
-use std::{iter::Skip, str::Chars};
-
 /// 读取 EMCAScript 源码
 ///
 /// 实现该 Trait 应维护一个读取源码的游标，从源码中读取游标指定的字符。
@@ -12,12 +10,6 @@ pub(crate) trait SourceReader {
     /// # Arguments
     /// * `off` - 游标移动偏移量
     fn next(&mut self, off: isize);
-
-    /// 以当前游标基准，读取偏移量为 `off` 的字符
-    ///
-    /// # Arguments
-    /// * `reader_fn` - 读取字符的回调函数
-    fn read(&self, reader_fn: &mut dyn FnMut(Skip<Chars>));
 
     /// 获取当前游标指向的字符
     ///
