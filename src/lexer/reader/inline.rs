@@ -14,7 +14,7 @@ impl<'s> InlineSourceReader<'s> {
     /// 构造一个读取 Rust 代码内写 EMCAScript 源码的 SourceReader
     ///
     /// # Arguments
-    /// `source` - JavaScript 源码
+    /// `source` - EMCAScript 源码
     /// # Returns
     /// SourceReader 的一个实现
     pub(crate) fn new(source: &'s str) -> Self {
