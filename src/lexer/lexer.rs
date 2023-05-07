@@ -8,8 +8,6 @@ type LexerResultOnlyErr = Result<(), lexer_error::LexerError>;
 /// 用于将 EMCAScript 源码拆解分析成为一组 Token
 pub(crate) struct Lexer<'s> {
     reader: &'s mut dyn reader::SourceReader,
-    current_chr: Option<char>,
-    lookahead_chr: Option<char>,
 
     line_number: usize,
     line_off: usize,
@@ -27,8 +25,6 @@ impl<'s> Lexer<'s> {
     pub(crate) fn new(reader: &'s mut dyn reader::SourceReader) -> Self {
         let mut result = Self {
             reader,
-            current_chr: None,
-            lookahead_chr: None,
 
             line_number: 1,
             line_off: 1,
@@ -70,6 +66,27 @@ impl<'s> Lexer<'s> {
     fn savenext(&mut self, chr: char) {
         self.save(chr);
         self.next(1);
+    }
+
+    /// 保存当前游标指向的字符到 token buffer，并移动游标到下一个字符
+    ///
+    /// # Arguments
+    /// `n` - 保存几次
+    fn savecurrent(&mut self, n: usize) {
+        for _ in 0..n {
+            if let Some(chr) = self.current() {
+                self.save(chr);
+            }
+
+            self.next(1);
+        }
+    }
+
+    /// 构造一个单字符操作符 Token，并将游标向下移动
+    #[inline(always)]
+    fn operatornext(&mut self, chr: char) -> Token {
+        self.next(1);
+        Token::Operator(chr)
     }
 
     /// 清空 token buffer
@@ -160,18 +177,18 @@ impl<'s> Lexer<'s> {
     /// 解析多行注释
     ///
     /// MultiLineComment ::
-    ///     `/*` [MultiLineCommentChars] `*/`
+    ///     `/*` MultiLineCommentChars? `*/`
     ///
     /// MultiLineCommentChars ::
-    ///     MultiLineNotAsteriskChar [MultiLineCommentChars]
-    ///     `*` [PostAsteriskCommentChars]
+    ///     MultiLineNotAsteriskChar MultiLineCommentChars?
+    ///     `*` PostAsteriskCommentChars?
     ///
     /// MultiLineNotAsteriskChar ::
     ///     SourceCharacter (but not `*`)
     ///
     /// PostAsteriskCommentChars ::
-    ///     MultiLineNotForwardSlashOrAsteriskChar [MultiLineCommentChars]
-    ///     `*` [PostAsteriskCommentChars]
+    ///     MultiLineNotForwardSlashOrAsteriskChar MultiLineCommentChars?
+    ///     `*` PostAsteriskCommentChars?
     ///
     /// MultiLineNotForwardSlashOrAsteriskChar ::
     ///     SourceCharacter (but not one of `/` or `*`)
@@ -207,10 +224,10 @@ impl<'s> Lexer<'s> {
     /// 解析单行注释
     ///
     /// SingleLineComment ::
-    ///     `//` [SingleLineCommentChars]
+    ///     `//` SingleLineCommentChars?
     ///
     /// SingleLineCommentChars ::
-    ///     SingleLineCommentChar [SingleLineCommentChars]
+    ///     SingleLineCommentChar SingleLineCommentChars?
     ///
     /// SingleLineCommentChar ::
     ///     SourceCharacter (but not LineTerminator)
@@ -244,7 +261,7 @@ impl<'s> Lexer<'s> {
     ///     HexDigit HexDigit HexDigit HexDigit
     ///
     /// CodePoint ::
-    ///     HexDigits
+    ///     HexDigits+
     ///
     /// HexDigits ::
     ///     HexDigit
@@ -271,7 +288,7 @@ impl<'s> Lexer<'s> {
             loop {
                 match self.current() {
                     Some('}') if has_digit => break,
-                    Some(chr) if code_points::is_hex_digit(chr) => {
+                    Some(chr) if chr.is_digit(16) => {
                         has_digit = true;
                         last_digit = true;
 
@@ -310,7 +327,7 @@ impl<'s> Lexer<'s> {
         } else {
             for _ in 0..4 {
                 match self.current() {
-                    Some(chr) if code_points::is_hex_digit(chr) => {
+                    Some(chr) if chr.is_digit(16) => {
                         if let Some(digit) = chr.to_digit(16) {
                             val <<= 4;
                             val |= digit;
@@ -405,7 +422,44 @@ impl<'s> Lexer<'s> {
         let token = self.get_tokenbuf();
 
         Ok(match token.as_str() {
-            "await" => Token::EOF,
+            "await" => Token::Await,
+            "break" => Token::Break,
+            "case" => Token::Case,
+            "catch" => Token::Catch,
+            "class" => Token::Class,
+            "const" => Token::Const,
+            "continue" => Token::Continue,
+            "debugger" => Token::Debugger,
+            "default" => Token::Default,
+            "delete" => Token::Delete,
+            "do" => Token::Do,
+            "else" => Token::Else,
+            "enum" => Token::Enum,
+            "export" => Token::Export,
+            "extends" => Token::Extends,
+            "false" => Token::False,
+            "finally" => Token::Finally,
+            "for" => Token::For,
+            "function" => Token::Function,
+            "if" => Token::If,
+            "import" => Token::Import,
+            "in" => Token::In,
+            "instanceof" => Token::InstanceOf,
+            "new" => Token::New,
+            "null" => Token::Null,
+            "return" => Token::Return,
+            "super" => Token::Super,
+            "switch" => Token::Switch,
+            "this" => Token::This,
+            "throw" => Token::Throw,
+            "true" => Token::True,
+            "try" => Token::Try,
+            "typeof" => Token::TypeOf,
+            "var" => Token::Var,
+            "void" => Token::Void,
+            "while" => Token::While,
+            "with" => Token::With,
+            "yield" => Token::Yield,
             _ => Token::IdentifierName(token),
         })
     }
@@ -424,6 +478,211 @@ impl<'s> Lexer<'s> {
         Ok(Token::IdentifierName(self.get_tokenbuf()))
     }
 
+    /// 解析数字
+    ///
+    /// NumbericLiteral ::
+    ///     DecimalLiteral
+    ///     DecimalBigIntegerLiteral
+    ///     NonDecimalIntegerLiteral+
+    ///     NonDecimalIntegerLiteral+ BigIntLiteralSuffix
+    ///     LegacyOctalIntegerLiteral
+    ///
+    /// DecimalLiteral ::
+    ///     DecimalIntegerLiteral `.` [DecimalDigits] [ExponentPart]
+    ///     `.` [DecimalDigits] [ExponentPart]
+    ///     DecimalIntegerLiteral [ExponentPart]
+    ///
+    /// ExponentPart ::
+    ///     ExponentIndicator SignedInteger
+    ///
+    /// ExponentIndicator ::
+    ///     `e`
+    ///     `E`
+    ///
+    /// SignedInteger ::
+    ///     DecimalDigits
+    ///     `+` DecimalDigits
+    ///     `-` DecimalDigits
+    ///
+    /// DecimalBigIntegerLiteral ::
+    ///     `0` BigIntLiteralSuffix
+    ///     NonZeroDigit [DecimalDigits] BigIntLiteralSuffix
+    ///     NonZeroDigit NumbericLiteralSeparator DecimalDigits BigIntLiteralSuffix
+    ///
+    /// NonDecimalIntegerLiteral ::
+    ///     BinaryIntegerLiteral
+    ///     OctalIntegerLiteral
+    ///     HexIntegerLiteral
+    ///
+    /// BinaryIntegerLiteral ::
+    ///     `0b` BinaryDigits
+    ///     `0B` BinaryDigits
+    ///
+    /// OctalIntegerLiteral ::
+    ///     `0o` OctalDigits
+    ///     `0O` OctalDigits
+    ///
+    /// HexIntegerLiteral ::
+    ///     `0x` HexDigits
+    ///     `0X` HexDigits
+    fn parse_number(&mut self) -> LexerResult {
+        enum NumberType {
+            MustDecimal,
+            MustOctal,
+            MustBinary,
+            MustHex,
+            MaybeOctal,
+        }
+
+        let mut has_digit = false;
+        let mut only_dec = false;
+        let mut may_allow_exp = false;
+        let mut allow_exp = false;
+        let mut allow_dot = false;
+        let mut number_type = match self.current() {
+            Some('0') if matches!(self.lookahead(), Some('b' | 'B')) => {
+                self.savecurrent(2);
+                NumberType::MustBinary
+            }
+            Some('0') if matches!(self.lookahead(), Some('o' | 'O')) => {
+                self.savecurrent(2);
+                NumberType::MustOctal
+            }
+            Some('0') if matches!(self.lookahead(), Some('x' | 'X')) => {
+                self.savecurrent(2);
+                NumberType::MustHex
+            }
+            Some('0') => {
+                self.savecurrent(1);
+                only_dec = true;
+                allow_dot = true;
+                allow_exp = true;
+                NumberType::MaybeOctal
+            }
+            Some('.') => {
+                self.savecurrent(1);
+                may_allow_exp = true;
+                NumberType::MustDecimal
+            }
+            _ => {
+                self.savecurrent(1);
+                has_digit = true;
+                only_dec = true;
+                allow_dot = true;
+                allow_exp = true;
+                NumberType::MustDecimal
+            }
+        };
+
+        loop {
+            match self.current() {
+                Some('n') if only_dec => {
+                    self.savecurrent(1);
+                    break;
+                }
+                Some('e' | 'E') if allow_exp && matches!(self.lookahead(), Some('+' | '-')) => {
+                    allow_exp = false;
+                    only_dec = false;
+                    has_digit = false;
+                    allow_dot = false;
+                    may_allow_exp = false;
+                    number_type = NumberType::MustDecimal;
+                    self.savecurrent(2);
+                }
+                Some('e' | 'E') if allow_exp => {
+                    allow_exp = false;
+                    only_dec = false;
+                    has_digit = false;
+                    allow_dot = false;
+                    may_allow_exp = false;
+                    number_type = NumberType::MustDecimal;
+                    self.savecurrent(1);
+                }
+                Some('.') if allow_dot => {
+                    allow_dot = false;
+                    only_dec = false;
+                    number_type = NumberType::MustDecimal;
+                    self.savecurrent(1);
+                }
+                Some('_')
+                    if has_digit
+                        && matches!(number_type, NumberType::MustHex)
+                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(16)) =>
+                {
+                    self.savecurrent(2);
+                }
+                Some('_')
+                    if has_digit
+                        && matches!(
+                            number_type,
+                            NumberType::MustDecimal | NumberType::MaybeOctal
+                        )
+                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(10)) =>
+                {
+                    if may_allow_exp {
+                        may_allow_exp = false;
+                        allow_exp = true;
+                    }
+                    self.savecurrent(2);
+                }
+                Some('_')
+                    if has_digit
+                        && matches!(number_type, NumberType::MustOctal)
+                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                {
+                    self.savecurrent(2);
+                }
+                Some('_')
+                    if has_digit
+                        && matches!(number_type, NumberType::MustBinary)
+                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(2)) =>
+                {
+                    self.savecurrent(2);
+                }
+                Some('0'..='7') if matches!(number_type, NumberType::MaybeOctal) => {
+                    has_digit = true;
+                    if may_allow_exp {
+                        may_allow_exp = false;
+                        allow_exp = true;
+                    }
+                    self.savecurrent(1);
+                }
+                Some('8'..='9') if matches!(number_type, NumberType::MaybeOctal) => {
+                    number_type = NumberType::MustDecimal;
+                    has_digit = true;
+                    if may_allow_exp {
+                        may_allow_exp = false;
+                        allow_exp = true;
+                    }
+                    self.savecurrent(1);
+                }
+                Some(chr) if matches!(number_type, NumberType::MustHex) && chr.is_digit(16) => {
+                    has_digit = true;
+                    self.savenext(chr);
+                }
+                Some(chr) if matches!(number_type, NumberType::MustDecimal) && chr.is_digit(10) => {
+                    has_digit = true;
+                    if may_allow_exp {
+                        may_allow_exp = false;
+                        allow_exp = true;
+                    }
+                    self.savenext(chr);
+                }
+                Some(chr) if matches!(number_type, NumberType::MustOctal) && chr.is_digit(8) => {
+                    has_digit = true;
+                    self.savenext(chr);
+                }
+                Some(chr) if matches!(number_type, NumberType::MustBinary) && chr.is_digit(2) => {
+                    has_digit = true;
+                    self.savenext(chr);
+                }
+                _ => break,
+            }
+        }
+
+        Ok(Token::Number(self.get_tokenbuf()))
+    }
+
     /// 从 EMCAScript 源码的当前游标起进行扫描，获取下一个 Token
     ///
     /// # Returns
@@ -433,8 +692,182 @@ impl<'s> Lexer<'s> {
 
         loop {
             match self.current() {
-                // 结束
-                None => return Ok(Token::EOF),
+                Some('#') if matches!(self.lookahead(), Some('!')) => {
+                    return self.parse_hashbang_comment(); // `#!`
+                }
+                Some('#')
+                    if matches!(self.lookahead(), Some('$' | '_'))
+                        || matches!(self.lookahead(), Some(chr) if code_points::is_id_start(chr)) =>
+                {
+                    return self.parse_private_identifier(); // PrivateIdentifier
+                }
+
+                Some('/') if matches!(self.lookahead(), Some('*' | '/')) => {
+                    return self.parse_comment()
+                }
+                Some('/') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::DivAssign); // `/=`
+                }
+
+                Some('.') if matches!(self.lookahead(), Some('0'..='9')) => {
+                    return self.parse_number()
+                }
+                Some('.') => {
+                    let op = self.operatornext('.');
+                    if matches!(self.current(), Some('.')) && matches!(self.lookahead(), Some('.'))
+                    {
+                        self.next(2);
+                        return Ok(Token::Spread); // `...`
+                    }
+                    return Ok(op); // `.`
+                }
+
+                Some('<') if matches!(self.lookahead(), Some('<')) => {
+                    self.next(2);
+                    match self.current() {
+                        Some('=') => {
+                            self.next(1);
+                            return Ok(Token::SHLAssign); // `<<=`
+                        }
+                        _ => return Ok(Token::SHL), // `<<`
+                    }
+                }
+                Some('<') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::LE); // `<=`
+                }
+
+                Some('>') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::GE); // `>=`
+                }
+                Some('>') if matches!(self.lookahead(), Some('>')) => {
+                    self.next(2);
+                    match self.current() {
+                        Some('>') if matches!(self.lookahead(), Some('=')) => {
+                            self.next(2);
+                            return Ok(Token::USHRAssign); // `>>>=`
+                        }
+                        Some('>') => {
+                            self.next(1);
+                            return Ok(Token::USHR); // `>>>`
+                        }
+                        Some('=') => {
+                            self.next(1);
+                            return Ok(Token::SHRAssign); // `>>=`
+                        }
+                        _ => return Ok(Token::SHR), // `>>`
+                    }
+                }
+
+                Some('=') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::StrictEqual); // `===`
+                    }
+                    return Ok(Token::Equal); // `==`
+                }
+                Some('=') if matches!(self.lookahead(), Some('>')) => {
+                    self.next(2);
+                    return Ok(Token::ArrowFunction); // `=>`
+                }
+
+                Some('!') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::StrictNotEqual); // `!==`
+                    }
+                    return Ok(Token::NotEqual); // `!=`
+                }
+
+                Some('*') if matches!(self.lookahead(), Some('*')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::ExpAssign); // `**=`
+                    }
+                    return Ok(Token::Exp); // `**`
+                }
+                Some('*') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::MulAssign); // `*=`
+                }
+
+                Some('+') if matches!(self.lookahead(), Some('+')) => {
+                    self.next(2);
+                    return Ok(Token::Incr); // `++`
+                }
+                Some('+') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::AddAssign); // `+=`
+                }
+
+                Some('-') if matches!(self.lookahead(), Some('-')) => {
+                    self.next(2);
+                    return Ok(Token::Decr); // `--`
+                }
+                Some('-') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::SubAssign); // `-=`
+                }
+
+                Some('&') if matches!(self.lookahead(), Some('&')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::AndAssign); // `&&=`
+                    }
+                    return Ok(Token::And); // `&&`
+                }
+                Some('&') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::BitAndAssign); // `&=`
+                }
+
+                Some('|') if matches!(self.lookahead(), Some('|')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::OrAssign); // `||=`
+                    }
+                    return Ok(Token::Or); // `||`
+                }
+                Some('|') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::BitOrAssign); // `|=`
+                }
+
+                Some('^') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::XORAssign); // `^=`
+                }
+
+                Some('?') if matches!(self.lookahead(), Some('?')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some('=')) {
+                        self.next(1);
+                        return Ok(Token::CoalNullAssign);
+                    }
+                    return Ok(Token::CoalNull);
+                }
+                Some('?') if matches!(self.lookahead(), Some('.')) => {
+                    self.next(2);
+                    if matches!(self.current(), Some(chr) if chr.is_digit(10)) {
+                        return Err(lexer_error::LexerError::new(
+                            self.line_number,
+                            self.line_off,
+                        ));
+                    }
+                    return Ok(Token::Chain);
+                }
+
+                Some('%') if matches!(self.lookahead(), Some('=')) => {
+                    self.next(2);
+                    return Ok(Token::ModAssign);
+                }
 
                 // 换行
                 Some(chr) if code_points::is_line_terminator(chr) => {
@@ -448,49 +881,18 @@ impl<'s> Lexer<'s> {
                     continue;
                 }
 
-                // 注释 || 除法
-                Some('/') => match self.lookahead() {
-                    Some('*' | '/') => return self.parse_comment(),
-                    Some('=') => {
-                        self.next(2);
-                        return Ok(Token::DivAssignOp);
-                    }
-                    _ => {
-                        self.next(1);
-                        return Ok(Token::DivOp);
-                    }
-                },
-
-                Some('#') => match self.lookahead() {
-                    // Hashbang Comment
-                    Some('!') => {
-                        return self.parse_hashbang_comment();
-                    }
-
-                    // PrivateIdentifier
-                    Some(chr) if matches!(chr, '$' | '_') || code_points::is_id_start(chr) => {
-                        return self.parse_private_identifier();
-                    }
-
-                    _ => {
-                        return Err(lexer_error::LexerError::new(
-                            self.line_number,
-                            self.line_off,
-                        ));
-                    }
-                },
-
                 // IdentifierName || ReservedWord
                 Some(chr) if matches!(chr, '$' | '_') || code_points::is_id_start(chr) => {
-                    return self.parse_identifier_name();
+                    return self.parse_identifier_name(); // IdentifierName
                 }
 
-                _ => {
-                    return Err(lexer_error::LexerError::new(
-                        self.line_number,
-                        self.line_off,
-                    ));
-                }
+                Some('0'..='9') => return self.parse_number(),
+
+                // 单字符操作符
+                Some(chr) => return Ok(self.operatornext(chr)),
+
+                // 结束
+                None => return Ok(Token::EOF),
             }
         }
     }

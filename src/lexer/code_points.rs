@@ -120,13 +120,3 @@ pub(super) const fn is_id_continue(chr: char) -> bool {
         | 0xff41..=0xff5a
         | 0xff65..=0xffdc)
 }
-
-/// 判断当前字符是否为 Hex Digit
-///
-/// # Arguments
-/// `chr` - 字符
-/// # Returns
-/// 返回当前字段是否是 Hex Digit
-pub(super) const fn is_hex_digit(chr: char) -> bool {
-    matches!(chr, |'0'..='9'| 'A'..='F' | 'a'..='f')
-}
