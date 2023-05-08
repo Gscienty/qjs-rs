@@ -10,14 +10,14 @@ fn test_Lexer_parse_singleline_comment() {
     );
     let mut lexer = Lexer::new(&mut src);
 
-    if let Ok(result) = lexer.next_token() {
-        assert!(matches!(result, Token::Comment(v) if v.eq(" hello world   ")))
+    if lexer.next_token().is_ok() {
+        assert!(matches!(lexer.current(), Token::Comment(v) if v.eq(" hello world   ")))
     } else {
         panic!("next token failed")
     }
 
-    if let Ok(result) = lexer.next_token() {
-        assert!(matches!(result, Token::Comment(v) if v.eq("// foobar")))
+    if lexer.next_token().is_ok() {
+        assert!(matches!(lexer.current(), Token::Comment(v) if v.eq("// foobar")))
     } else {
         panic!("next token failed")
     }
@@ -33,8 +33,8 @@ fn test_Lexer_parse_multiline_comment() {
     );
     let mut lexer = Lexer::new(&mut src);
 
-    if let Ok(result) = lexer.next_token() {
-        assert!(matches!(result, Token::Comment(v) if v.eq("*\n* hello\n* world\n")))
+    if lexer.next_token().is_ok() {
+        assert!(matches!(lexer.current(), Token::Comment(v) if v.eq("*\n* hello\n* world\n")))
     } else {
         panic!("next token failed")
     }
@@ -45,8 +45,8 @@ fn test_Lexer_parse_hashbang_comment() {
     let mut src = reader::InlineSourceReader::new(r#"#! hashbang"#);
     let mut lexer = Lexer::new(&mut src);
 
-    if let Ok(result) = lexer.next_token() {
-        assert!(matches!(result, Token::HashbangComment(v) if v.eq(" hashbang")))
+    if lexer.next_token().is_ok() {
+        assert!(matches!(lexer.current(), Token::HashbangComment(v) if v.eq(" hashbang")))
     } else {
         panic!("next token failed")
     }
@@ -58,9 +58,9 @@ fn test_Lexer_parse_identify_name() {
     let mut lexer = Lexer::new(&mut src);
 
     let mut verify = |exp: &str| {
-        if let Ok(result) = lexer.next_token() {
-            println!("verify token: {:?} {}", result, exp);
-            assert!(matches!(result, Token::IdentifierName(v) if v.eq(exp)));
+        if lexer.next_token().is_ok() {
+            println!("verify token: {:?} {}", lexer.current(), exp);
+            assert!(matches!(lexer.current(), Token::IdentifierName(v) if v.eq(exp)));
             println!("verify token: {} success", exp);
         } else {
             println!("verify token: {} failed", exp);
@@ -85,9 +85,9 @@ fn test_Lexer_parse_number() {
     let mut lexer = Lexer::new(&mut src);
 
     let mut verify = |exp: &str| {
-        if let Ok(result) = lexer.next_token() {
-            println!("verify token: {:?} {}", result, exp);
-            assert!(matches!(result, Token::Number(v) if v.eq(exp)));
+        if lexer.next_token().is_ok() {
+            println!("verify token: {:?} {}", lexer.current(), exp);
+            assert!(matches!(lexer.current(), Token::Number(v) if v.eq(exp)));
             println!("verify token: {} success", exp);
         } else {
             println!("verify token: {} failed", exp);
@@ -109,4 +109,49 @@ fn test_Lexer_parse_number() {
     verify("0n");
     verify("1n");
     verify("123n");
+}
+
+#[test]
+fn test_Lexer_parse_string() {
+    let mut src = reader::InlineSourceReader::new(r#""hello" 'world' '"' "'" '\'' "\"" "#);
+    let mut lexer = Lexer::new(&mut src);
+
+    let mut verify = |exp: &str| {
+        if lexer.next_token().is_ok() {
+            println!("verify token: {:?} {}", lexer.current(), exp);
+            assert!(matches!(lexer.current(), Token::Str(v) if v.eq(exp)));
+            println!("verify token: {} success", exp);
+        } else {
+            println!("verify token: {} failed", exp);
+            panic!("next token failed")
+        }
+    };
+
+    verify("hello");
+    verify("world");
+    verify("\"");
+    verify("'");
+    verify("'");
+    verify("\"");
+}
+
+#[test]
+fn test_Lexer_parse_regular() {
+    let mut src = reader::InlineSourceReader::new(r#"/.*?/ /^.*?\/$/ /[\]]/ "#);
+    let mut lexer = Lexer::new(&mut src);
+
+    let mut verify = |exp: &str| {
+        if lexer.next_token().is_ok() {
+            println!("verify token: {:?} {}", lexer.current(), exp);
+            assert!(matches!(lexer.current(), Token::Regular(v) if v.eq(exp)));
+            println!("verify token: {} success", exp);
+        } else {
+            println!("verify token: {} failed", exp);
+            panic!("next token failed")
+        }
+    };
+
+    verify(".*?");
+    verify("^.*?\\/$");
+    verify("[\\]]");
 }

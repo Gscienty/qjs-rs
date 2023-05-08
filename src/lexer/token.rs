@@ -83,4 +83,5 @@ pub(crate) enum Token {
     Operator(char),
     Number(String),
     Str(String),
+    Regular(String),
 }

@@ -13,6 +13,8 @@ pub(crate) struct Lexer<'s> {
     line_off: usize,
 
     tokenbuf: String,
+
+    tok: Token,
 }
 
 impl<'s> Lexer<'s> {
@@ -30,6 +32,8 @@ impl<'s> Lexer<'s> {
             line_off: 1,
 
             tokenbuf: String::new(),
+
+            tok: Token::EOF,
         };
         result.next(1);
 
@@ -41,18 +45,6 @@ impl<'s> Lexer<'s> {
         self.reader.next(off as isize);
 
         self.line_off += off;
-    }
-
-    /// 获取当前游标指向的字符
-    #[inline(always)]
-    fn current(&self) -> Option<char> {
-        self.reader.current()
-    }
-
-    /// 获取游标指向的下一个字符
-    #[inline(always)]
-    fn lookahead(&self) -> Option<char> {
-        self.reader.lookahead()
     }
 
     /// 保存字符到 token buffer
@@ -74,7 +66,7 @@ impl<'s> Lexer<'s> {
     /// `n` - 保存几次
     fn savecurrent(&mut self, n: usize) {
         for _ in 0..n {
-            if let Some(chr) = self.current() {
+            if let Some(chr) = self.reader.current() {
                 self.save(chr);
             }
 
@@ -116,10 +108,10 @@ impl<'s> Lexer<'s> {
     ///     <PS>
     ///     <CR> <LF>
     fn newline(&mut self) {
-        if matches!(self.current(), None) {
+        if matches!(self.reader.current(), None) {
             return;
         }
-        if matches!(self.current(), Some(chr) if !code_points::is_line_terminator(chr)) {
+        if matches!(self.reader.current(), Some(chr) if !code_points::is_line_terminator(chr)) {
             return;
         }
 
@@ -128,11 +120,11 @@ impl<'s> Lexer<'s> {
 
         // 如果是 <CR>, 则进一步判断下一个字符是否是 <LF>
         // 若凑成 <CR><LF>，即命中 LineTerminatorSequence 词法规则，则消费掉后续的 <LF>
-        if !matches!(self.current(), Some(code_points::CR)) {
+        if !matches!(self.reader.current(), Some(code_points::CR)) {
             self.next(1);
             return;
         }
-        if !matches!(self.lookahead(), Some(code_points::LF)) {
+        if !matches!(self.reader.lookahead(), Some(code_points::LF)) {
             self.next(1);
             return;
         }
@@ -148,7 +140,7 @@ impl<'s> Lexer<'s> {
     /// # Returns
     /// 返回注释 Token （此处应直接摒弃）
     fn parse_comment(&mut self) -> LexerResult {
-        match self.lookahead() {
+        match self.reader.lookahead() {
             Some('/') => self.parse_singleline_comment()?,
             Some('*') => self.parse_multiline_comment()?,
             _ => {
@@ -199,14 +191,14 @@ impl<'s> Lexer<'s> {
         self.next(2);
 
         loop {
-            match self.current() {
+            match self.reader.current() {
                 None => {
                     return Err(lexer_error::LexerError::new(
                         self.line_number,
                         self.line_off,
                     ))
                 }
-                Some('*') if matches!(self.lookahead(), Some('/')) => {
+                Some('*') if matches!(self.reader.lookahead(), Some('/')) => {
                     self.next(2);
                     break;
                 }
@@ -238,7 +230,7 @@ impl<'s> Lexer<'s> {
         self.next(2);
 
         loop {
-            match self.current() {
+            match self.reader.current() {
                 None => break,
                 Some(chr) if code_points::is_line_terminator(chr) => {
                     self.newline();
@@ -271,7 +263,7 @@ impl<'s> Lexer<'s> {
     /// NumbericLiteralSeparator ::
     ///     `_`
     fn parse_unicode_escape_sequence(&mut self) -> LexerResultOnlyErr {
-        if !matches!(self.current(), Some('u')) {
+        if !matches!(self.reader.current(), Some('u')) {
             return Err(lexer_error::LexerError::new(
                 self.line_number,
                 self.line_off,
@@ -280,13 +272,13 @@ impl<'s> Lexer<'s> {
         self.next(1);
 
         let mut val: u32 = 0;
-        if matches!(self.current(), Some('{')) {
+        if matches!(self.reader.current(), Some('{')) {
             self.next(1);
 
             let mut has_digit = false;
             let mut last_digit = false;
             loop {
-                match self.current() {
+                match self.reader.current() {
                     Some('}') if has_digit => break,
                     Some(chr) if chr.is_digit(16) => {
                         has_digit = true;
@@ -326,7 +318,7 @@ impl<'s> Lexer<'s> {
             }
         } else {
             for _ in 0..4 {
-                match self.current() {
+                match self.reader.current() {
                     Some(chr) if chr.is_digit(16) => {
                         if let Some(digit) = chr.to_digit(16) {
                             val <<= 4;
@@ -391,7 +383,7 @@ impl<'s> Lexer<'s> {
     /// 返回解析过程是否成功
     fn parse_identifier_name_part(&mut self) -> LexerResultOnlyErr {
         loop {
-            match self.current() {
+            match self.reader.current() {
                 Some(chr)
                     if code_points::is_id_start(chr)
                         || code_points::is_id_continue(chr)
@@ -539,16 +531,16 @@ impl<'s> Lexer<'s> {
         let mut may_allow_exp = false;
         let mut allow_exp = false;
         let mut allow_dot = false;
-        let mut number_type = match self.current() {
-            Some('0') if matches!(self.lookahead(), Some('b' | 'B')) => {
+        let mut number_type = match self.reader.current() {
+            Some('0') if matches!(self.reader.lookahead(), Some('b' | 'B')) => {
                 self.savecurrent(2);
                 NumberType::MustBinary
             }
-            Some('0') if matches!(self.lookahead(), Some('o' | 'O')) => {
+            Some('0') if matches!(self.reader.lookahead(), Some('o' | 'O')) => {
                 self.savecurrent(2);
                 NumberType::MustOctal
             }
-            Some('0') if matches!(self.lookahead(), Some('x' | 'X')) => {
+            Some('0') if matches!(self.reader.lookahead(), Some('x' | 'X')) => {
                 self.savecurrent(2);
                 NumberType::MustHex
             }
@@ -575,12 +567,14 @@ impl<'s> Lexer<'s> {
         };
 
         loop {
-            match self.current() {
+            match self.reader.current() {
                 Some('n') if only_dec => {
                     self.savecurrent(1);
                     break;
                 }
-                Some('e' | 'E') if allow_exp && matches!(self.lookahead(), Some('+' | '-')) => {
+                Some('e' | 'E')
+                    if allow_exp && matches!(self.reader.lookahead(), Some('+' | '-')) =>
+                {
                     allow_exp = false;
                     only_dec = false;
                     has_digit = false;
@@ -607,7 +601,7 @@ impl<'s> Lexer<'s> {
                 Some('_')
                     if has_digit
                         && matches!(number_type, NumberType::MustHex)
-                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(16)) =>
+                        && matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(16)) =>
                 {
                     self.savecurrent(2);
                 }
@@ -617,7 +611,7 @@ impl<'s> Lexer<'s> {
                             number_type,
                             NumberType::MustDecimal | NumberType::MaybeOctal
                         )
-                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(10)) =>
+                        && matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(10)) =>
                 {
                     if may_allow_exp {
                         may_allow_exp = false;
@@ -628,14 +622,14 @@ impl<'s> Lexer<'s> {
                 Some('_')
                     if has_digit
                         && matches!(number_type, NumberType::MustOctal)
-                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                        && matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
                 {
                     self.savecurrent(2);
                 }
                 Some('_')
                     if has_digit
                         && matches!(number_type, NumberType::MustBinary)
-                        && matches!(self.lookahead(), Some(chr) if chr.is_digit(2)) =>
+                        && matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(2)) =>
                 {
                     self.savecurrent(2);
                 }
@@ -709,25 +703,25 @@ impl<'s> Lexer<'s> {
     ///     \ EscapeSequence
     ///     LineContinuation
     fn parse_string(&mut self) -> LexerResult {
-        let quota = self.current();
+        let quota = self.reader.current();
         self.next(1);
 
         loop {
-            if self.current().eq(&quota) {
+            if self.reader.current().eq(&quota) {
                 self.next(1);
                 break;
             }
 
-            match self.current() {
+            match self.reader.current() {
                 Some('\u{2028}' | '\u{2029}') => self.savecurrent(1),
-                Some('\\') if matches!(self.lookahead(), Some(chr) if code_points::is_line_terminator(chr)) =>
+                Some('\\') if matches!(self.reader.lookahead(), Some(chr) if code_points::is_line_terminator(chr)) =>
                 {
                     self.save('\n');
                     self.newline();
                 }
                 Some('\\') => {
                     self.next(1);
-                    match self.current() {
+                    match self.reader.current() {
                         Some('\'') => self.savecurrent(1),
                         Some('\"') => self.savecurrent(1),
                         Some('\\') => self.savecurrent(1),
@@ -737,28 +731,30 @@ impl<'s> Lexer<'s> {
                         Some('r') => self.savenext('\r'),
                         Some('t') => self.savenext('\t'),
                         Some('v') => self.savenext('\x0b'),
-                        Some('0') if !matches!(self.lookahead(), Some(chr) if chr.is_digit(10)) => {
+                        Some('0') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(10)) =>
+                        {
                             self.savenext('\0');
                         }
-                        Some('0') if matches!(self.lookahead(), Some('8' | '9')) => {
+                        Some('0') if matches!(self.reader.lookahead(), Some('8' | '9')) => {
                             self.savenext('\0');
                         }
-                        Some('0'..='3') if matches!(self.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                        Some('0'..='3') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
                         {
                             let mut val = 0u32;
-                            if let Some(oct) = self.current().and_then(|x| x.to_digit(8)) {
+                            if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
                                 val |= oct;
                             }
                             self.next(1);
 
-                            if let Some(oct) = self.current().and_then(|x| x.to_digit(8)) {
+                            if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
                                 val <<= 3;
                                 val |= oct;
                             }
                             self.next(1);
 
-                            if matches!(self.current(), Some(chr) if chr.is_digit(8)) {
-                                if let Some(oct) = self.current().and_then(|x| x.to_digit(8)) {
+                            if matches!(self.reader.current(), Some(chr) if chr.is_digit(8)) {
+                                if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8))
+                                {
                                     val <<= 3;
                                     val |= oct;
                                 }
@@ -774,11 +770,13 @@ impl<'s> Lexer<'s> {
                                 ));
                             }
                         }
-                        Some('4'..='7') if matches!(self.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                        Some('4'..='7') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
                         {
                             let mut val = 0u32;
                             for _ in 0..2 {
-                                if let Some(digit) = self.current().and_then(|x| x.to_digit(8)) {
+                                if let Some(digit) =
+                                    self.reader.current().and_then(|x| x.to_digit(8))
+                                {
                                     val <<= 3;
                                     val |= digit;
                                 } else {
@@ -798,8 +796,9 @@ impl<'s> Lexer<'s> {
                                 ));
                             }
                         }
-                        Some('1'..='7') if !matches!(self.lookahead(), Some(chr) if chr.is_digit(8)) => {
+                        Some('1'..='7') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) => {
                             if let Some(chr) = self
+                                .reader
                                 .current()
                                 .and_then(|x| x.to_digit(8))
                                 .and_then(|x| char::from_u32(x))
@@ -817,7 +816,9 @@ impl<'s> Lexer<'s> {
 
                             let mut val = 0u32;
                             for _ in 0..2 {
-                                if let Some(digit) = self.current().and_then(|x| x.to_digit(16)) {
+                                if let Some(digit) =
+                                    self.reader.current().and_then(|x| x.to_digit(16))
+                                {
                                     val <<= 4;
                                     val |= digit;
                                 } else {
@@ -859,39 +860,166 @@ impl<'s> Lexer<'s> {
         Ok(Token::Str(self.get_tokenbuf()))
     }
 
+    /// 解析正则表达式
+    ///
+    /// RegularExpressionLiteral ::
+    ///     `/` RegularExpressionBody `/` RegularExpressionFlags
+    ///
+    /// RegularExpressionBody ::
+    ///     RegularExpressionFirstChar RegularExpressionChars
+    ///
+    /// RegularExpressionFirstChar ::
+    ///     RegularExpressionNonTerminator (but not one of `*` or `\` or `/` or `[`)
+    ///     RegularExpressionBackslashSequence
+    ///     RegularExpressionClass
+    ///
+    /// RegularExpressionBackslashSequence ::
+    ///     `\` RegularExpressionNonTerminator
+    ///
+    /// RegularExpressionClass ::
+    ///     `[` RegularExpressionClassChars `]`
+    ///
+    /// RegularExpressionClassChars ::
+    ///     [empty]
+    ///     RegularExpressionClassChars RegularExpressionClassChar
+    ///
+    /// RegularExpressionClassChar ::
+    ///     RegularExpressionNonTerminator (but not one of `]` or `\`)
+    ///     RegularExpressionBackslashSequence
+    ///
+    /// RegularExpressionFlags ::
+    ///     [empty]
+    ///     RegularExpressionFlags IdentifierPartChar
+    fn parse_regular(&mut self) -> LexerResult {
+        self.next(1);
+
+        let mut class_depth = 0;
+        loop {
+            if matches!(self.reader.current(), Some('/')) {
+                self.next(1);
+                break;
+            }
+
+            match self.reader.current() {
+                Some('\\') if matches!(self.reader.lookahead(), Some(chr) if !code_points::is_line_terminator(chr)) => {
+                    self.savecurrent(2)
+                }
+                Some('\\') if matches!(self.reader.lookahead(), Some(chr) if code_points::is_line_terminator(chr)) => {
+                    return Err(lexer_error::LexerError::new(
+                        self.line_number,
+                        self.line_off,
+                    ))
+                }
+                Some('\\') if matches!(self.reader.lookahead(), None) => {
+                    return Err(lexer_error::LexerError::new(
+                        self.line_number,
+                        self.line_off,
+                    ))
+                }
+                Some('[') => {
+                    self.savenext('[');
+                    class_depth += 1;
+                }
+                Some(']') if class_depth <= 0 => {
+                    return Err(lexer_error::LexerError::new(
+                        self.line_number,
+                        self.line_off,
+                    ))
+                }
+                Some(']') => {
+                    self.savenext(']');
+                    class_depth -= 1;
+                }
+                Some(chr) if code_points::is_line_terminator(chr) => {
+                    return Err(lexer_error::LexerError::new(
+                        self.line_number,
+                        self.line_off,
+                    ))
+                }
+                Some(chr) => self.savenext(chr),
+                _ => {
+                    return Err(lexer_error::LexerError::new(
+                        self.line_number,
+                        self.line_off,
+                    ))
+                }
+            }
+        }
+
+        if class_depth != 0 {
+            return Err(lexer_error::LexerError::new(
+                self.line_number,
+                self.line_off,
+            ));
+        }
+
+        Ok(Token::Regular(self.get_tokenbuf()))
+    }
+
+    /// 获取下一个 Token
+    ///
+    /// # Returns
+    /// 如果获取下一个 token 失败，则返回报错
+    pub(crate) fn next_token(&mut self) -> LexerResultOnlyErr {
+        self.tok = self.scan()?;
+
+        Ok(())
+    }
+
+    /// 获取当前 Token
+    #[inline(always)]
+    pub(crate) const fn current(&self) -> &Token {
+        &self.tok
+    }
+
     /// 从 EMCAScript 源码的当前游标起进行扫描，获取下一个 Token
     ///
     /// # Returns
     /// 返回下一个 Token
-    pub(crate) fn next_token(&mut self) -> LexerResult {
+    fn scan(&mut self) -> LexerResult {
         self.tokenbuf.clear();
 
         loop {
-            match self.current() {
-                Some('#') if matches!(self.lookahead(), Some('!')) => {
+            match self.reader.current() {
+                Some('#') if matches!(self.reader.lookahead(), Some('!')) => {
                     return self.parse_hashbang_comment(); // `#!`
                 }
                 Some('#')
-                    if matches!(self.lookahead(), Some('$' | '_'))
-                        || matches!(self.lookahead(), Some(chr) if code_points::is_id_start(chr)) =>
+                    if matches!(self.reader.lookahead(), Some('$' | '_'))
+                        || matches!(self.reader.lookahead(), Some(chr) if code_points::is_id_start(chr)) =>
                 {
                     return self.parse_private_identifier(); // PrivateIdentifier
                 }
 
-                Some('/') if matches!(self.lookahead(), Some('*' | '/')) => {
+                // 注释
+                Some('/') if matches!(self.reader.lookahead(), Some('*' | '/')) => {
                     return self.parse_comment()
                 }
-                Some('/') if matches!(self.lookahead(), Some('=')) => {
+                // 正则表达式
+                Some('/')
+                    if !matches!(
+                        self.current(),
+                        Token::Number(..)
+                            | Token::IdentifierName(..)
+                            | Token::Str(..)
+                            | Token::Operator(')' | ']')
+                    ) =>
+                {
+                    return self.parse_regular();
+                }
+                // 除法运算符
+                Some('/') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::DivAssign); // `/=`
                 }
 
-                Some('.') if matches!(self.lookahead(), Some('0'..='9')) => {
+                Some('.') if matches!(self.reader.lookahead(), Some('0'..='9')) => {
                     return self.parse_number()
                 }
                 Some('.') => {
                     let op = self.operatornext('.');
-                    if matches!(self.current(), Some('.')) && matches!(self.lookahead(), Some('.'))
+                    if matches!(self.reader.current(), Some('.'))
+                        && matches!(self.reader.lookahead(), Some('.'))
                     {
                         self.next(2);
                         return Ok(Token::Spread); // `...`
@@ -899,9 +1027,9 @@ impl<'s> Lexer<'s> {
                     return Ok(op); // `.`
                 }
 
-                Some('<') if matches!(self.lookahead(), Some('<')) => {
+                Some('<') if matches!(self.reader.lookahead(), Some('<')) => {
                     self.next(2);
-                    match self.current() {
+                    match self.reader.current() {
                         Some('=') => {
                             self.next(1);
                             return Ok(Token::SHLAssign); // `<<=`
@@ -909,19 +1037,19 @@ impl<'s> Lexer<'s> {
                         _ => return Ok(Token::SHL), // `<<`
                     }
                 }
-                Some('<') if matches!(self.lookahead(), Some('=')) => {
+                Some('<') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::LE); // `<=`
                 }
 
-                Some('>') if matches!(self.lookahead(), Some('=')) => {
+                Some('>') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::GE); // `>=`
                 }
-                Some('>') if matches!(self.lookahead(), Some('>')) => {
+                Some('>') if matches!(self.reader.lookahead(), Some('>')) => {
                     self.next(2);
-                    match self.current() {
-                        Some('>') if matches!(self.lookahead(), Some('=')) => {
+                    match self.reader.current() {
+                        Some('>') if matches!(self.reader.lookahead(), Some('=')) => {
                             self.next(2);
                             return Ok(Token::USHRAssign); // `>>>=`
                         }
@@ -937,101 +1065,101 @@ impl<'s> Lexer<'s> {
                     }
                 }
 
-                Some('=') if matches!(self.lookahead(), Some('=')) => {
+                Some('=') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::StrictEqual); // `===`
                     }
                     return Ok(Token::Equal); // `==`
                 }
-                Some('=') if matches!(self.lookahead(), Some('>')) => {
+                Some('=') if matches!(self.reader.lookahead(), Some('>')) => {
                     self.next(2);
                     return Ok(Token::ArrowFunction); // `=>`
                 }
 
-                Some('!') if matches!(self.lookahead(), Some('=')) => {
+                Some('!') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::StrictNotEqual); // `!==`
                     }
                     return Ok(Token::NotEqual); // `!=`
                 }
 
-                Some('*') if matches!(self.lookahead(), Some('*')) => {
+                Some('*') if matches!(self.reader.lookahead(), Some('*')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::ExpAssign); // `**=`
                     }
                     return Ok(Token::Exp); // `**`
                 }
-                Some('*') if matches!(self.lookahead(), Some('=')) => {
+                Some('*') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::MulAssign); // `*=`
                 }
 
-                Some('+') if matches!(self.lookahead(), Some('+')) => {
+                Some('+') if matches!(self.reader.lookahead(), Some('+')) => {
                     self.next(2);
                     return Ok(Token::Incr); // `++`
                 }
-                Some('+') if matches!(self.lookahead(), Some('=')) => {
+                Some('+') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::AddAssign); // `+=`
                 }
 
-                Some('-') if matches!(self.lookahead(), Some('-')) => {
+                Some('-') if matches!(self.reader.lookahead(), Some('-')) => {
                     self.next(2);
                     return Ok(Token::Decr); // `--`
                 }
-                Some('-') if matches!(self.lookahead(), Some('=')) => {
+                Some('-') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::SubAssign); // `-=`
                 }
 
-                Some('&') if matches!(self.lookahead(), Some('&')) => {
+                Some('&') if matches!(self.reader.lookahead(), Some('&')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::AndAssign); // `&&=`
                     }
                     return Ok(Token::And); // `&&`
                 }
-                Some('&') if matches!(self.lookahead(), Some('=')) => {
+                Some('&') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::BitAndAssign); // `&=`
                 }
 
-                Some('|') if matches!(self.lookahead(), Some('|')) => {
+                Some('|') if matches!(self.reader.lookahead(), Some('|')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::OrAssign); // `||=`
                     }
                     return Ok(Token::Or); // `||`
                 }
-                Some('|') if matches!(self.lookahead(), Some('=')) => {
+                Some('|') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::BitOrAssign); // `|=`
                 }
 
-                Some('^') if matches!(self.lookahead(), Some('=')) => {
+                Some('^') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::XORAssign); // `^=`
                 }
 
-                Some('?') if matches!(self.lookahead(), Some('?')) => {
+                Some('?') if matches!(self.reader.lookahead(), Some('?')) => {
                     self.next(2);
-                    if matches!(self.current(), Some('=')) {
+                    if matches!(self.reader.current(), Some('=')) {
                         self.next(1);
                         return Ok(Token::CoalNullAssign);
                     }
                     return Ok(Token::CoalNull);
                 }
-                Some('?') if matches!(self.lookahead(), Some('.')) => {
+                Some('?') if matches!(self.reader.lookahead(), Some('.')) => {
                     self.next(2);
-                    if matches!(self.current(), Some(chr) if chr.is_digit(10)) {
+                    if matches!(self.reader.current(), Some(chr) if chr.is_digit(10)) {
                         return Err(lexer_error::LexerError::new(
                             self.line_number,
                             self.line_off,
@@ -1040,11 +1168,12 @@ impl<'s> Lexer<'s> {
                     return Ok(Token::Chain);
                 }
 
-                Some('%') if matches!(self.lookahead(), Some('=')) => {
+                Some('%') if matches!(self.reader.lookahead(), Some('=')) => {
                     self.next(2);
                     return Ok(Token::ModAssign);
                 }
 
+                // 字符串
                 Some('"' | '\'') => return self.parse_string(),
 
                 // 换行
