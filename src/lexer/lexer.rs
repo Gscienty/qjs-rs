@@ -15,6 +15,8 @@ pub(crate) struct Lexer<'s> {
     tokenbuf: String,
 
     tok: Token,
+
+    template_expression: Vec<u8>,
 }
 
 impl<'s> Lexer<'s> {
@@ -34,6 +36,8 @@ impl<'s> Lexer<'s> {
             tokenbuf: String::new(),
 
             tok: Token::EOF,
+
+            template_expression: Vec::new(),
         };
         result.next(1);
 
@@ -91,6 +95,99 @@ impl<'s> Lexer<'s> {
     #[inline(always)]
     fn get_tokenbuf(&self) -> String {
         self.tokenbuf.clone()
+    }
+
+    /// 进入一个 template literal 的表达式部分
+    #[inline(always)]
+    fn template_enter_expression(&mut self) {
+        self.template_expression.push(0);
+    }
+
+    /// 当前是否处于一个 template literal 的表达式部分中
+    ///
+    /// # Returns
+    /// 返回当前是否处于 template literal 的表达式部分
+    #[inline(always)]
+    fn template_in_expression(&self) -> bool {
+        !self.template_expression.is_empty()
+    }
+
+    /// 是否允许离开 template literal 的表达式部分
+    ///
+    /// # Returns
+    /// 返回是否允许离开 template literal 的表达式部分
+    #[inline(always)]
+    fn template_could_leave_expression(&self) -> bool {
+        if let Some(blocks) = self.template_expression.last() {
+            *blocks == 0
+        } else {
+            false
+        }
+    }
+
+    /// 离开 template literal 的表达式部分
+    ///
+    /// # Returns
+    /// 若不允许离开，则返回报错
+    #[inline(always)]
+    fn template_leave_expression(&mut self) -> LexerResultOnlyErr {
+        if let Some(blocks) = self.template_expression.pop() {
+            if blocks != 0 {
+                return Err(lexer_error::LexerError::new(
+                    self.line_number,
+                    self.line_off,
+                ));
+            }
+            Ok(())
+        } else {
+            Err(lexer_error::LexerError::new(
+                self.line_number,
+                self.line_off,
+            ))
+        }
+    }
+
+    /// 在一个 template literal 的表达式中，进入一个 block
+    ///
+    /// # Returns
+    /// 如果退出失败，
+    #[inline(always)]
+    fn template_expression_enter_block(&mut self) -> LexerResultOnlyErr {
+        if let Some(blocks) = self.template_expression.last_mut() {
+            *blocks += 1;
+
+            Ok(())
+        } else {
+            Err(lexer_error::LexerError::new(
+                self.line_number,
+                self.line_off,
+            ))
+        }
+    }
+
+    /// 在一个 template literal 的表达式中，退出一个 block
+    ///
+    /// # Returns
+    /// 如果退出失败，
+    #[inline(always)]
+    fn template_expression_leave_block(&mut self) -> LexerResultOnlyErr {
+        if let Some(blocks) = self.template_expression.last_mut() {
+            if *blocks == 0 {
+                return Err(lexer_error::LexerError::new(
+                    self.line_number,
+                    self.line_off,
+                ));
+            }
+
+            *blocks -= 1;
+
+            Ok(())
+        } else {
+            Err(lexer_error::LexerError::new(
+                self.line_number,
+                self.line_off,
+            ))
+        }
     }
 
     /// 跳过 LineTerminator 或 LineTerminatorSequence，并将 line_number += 1
@@ -865,6 +962,55 @@ impl<'s> Lexer<'s> {
         Ok(Token::Str(self.get_tokenbuf()))
     }
 
+    /// 解析 template
+    ///
+    /// Template ::
+    ///     NoSubstitutionTemplate
+    ///     TemplateHead
+    ///
+    /// NoSubstitutionTemplate ::
+    ///     ``` TemplateCharacters ```
+    ///
+    /// TemplateHead ::
+    ///     ``` TemplateCharacters `${`
+    ///
+    /// TemplateSubstitutionTail ::
+    ///     TemplateMiddle
+    ///     TemplateTail
+    ///
+    /// TemplateMiddle ::
+    ///     `}` TemplateCharacters `${`
+    ///
+    /// TemplateTail ::
+    ///     `}` TemplateCharacters ```
+    fn parse_template(&mut self) -> LexerResult {
+        let is_head = matches!(self.reader.current(), Some('`'));
+        self.next(1);
+
+        loop {
+            match self.reader.current() {
+                Some('`') => {
+                    self.next(1);
+                    break Ok(if is_head {
+                        Token::Str(self.get_tokenbuf())
+                    } else {
+                        Token::TemplateTail(self.get_tokenbuf())
+                    });
+                }
+                Some('$') if matches!(self.reader.lookahead(), Some('{')) => {
+                    self.next(2);
+                    self.template_enter_expression();
+                    break Ok(if is_head {
+                        Token::TemplateHead(self.get_tokenbuf())
+                    } else {
+                        Token::TemplateMiddle(self.get_tokenbuf())
+                    });
+                }
+                _ => self.parse_string_content()?,
+            }
+        }
+    }
+
     /// 解析正则表达式
     ///
     /// RegularExpressionLiteral ::
@@ -1180,6 +1326,26 @@ impl<'s> Lexer<'s> {
 
                 // 字符串
                 Some('"' | '\'') => return self.parse_string(),
+
+                // template
+                Some('`') => return self.parse_template(),
+
+                // template literal 表达式内 `{`
+                Some('{') if self.template_in_expression() => {
+                    self.template_expression_enter_block()?;
+
+                    return Ok(self.operatornext('{'));
+                }
+                // template literal 表达式内 `}`
+                Some('}') if self.template_in_expression() => {
+                    // 结束当前 template literal 表达式
+                    if self.template_could_leave_expression() {
+                        self.template_leave_expression()?;
+                        return self.parse_template();
+                    }
+                    self.template_expression_leave_block()?;
+                    return Ok(self.operatornext('}'));
+                }
 
                 // 换行
                 Some(chr) if code_points::is_line_terminator(chr) => {

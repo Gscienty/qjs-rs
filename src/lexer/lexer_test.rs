@@ -155,3 +155,29 @@ fn test_Lexer_parse_regular() {
     verify("^.*?\\/$");
     verify("[\\]]");
 }
+
+#[test]
+fn test_Lexer_parse_template() {
+    let mut src = reader::InlineSourceReader::new(r#"`hello ${world}${`你${好}`} foo ${bar}`"#);
+    let mut lexer = Lexer::new(&mut src);
+
+    let mut verify = |exp: Token| {
+        if lexer.next_token().is_err() {
+            println!("verify token: {:?} failed", exp);
+            panic!("next token failed")
+        }
+        println!("verify token: {:?} {:?}", lexer.current(), exp);
+        assert_eq!(lexer.current(), &exp);
+        println!("verify token: {:?} success", exp);
+    };
+
+    verify(Token::TemplateHead("hello ".to_string()));
+    verify(Token::IdentifierName("world".to_string()));
+    verify(Token::TemplateMiddle("".to_string()));
+    verify(Token::TemplateHead("你".to_string()));
+    verify(Token::IdentifierName("好".to_string()));
+    verify(Token::TemplateTail("".to_string()));
+    verify(Token::TemplateMiddle(" foo ".to_string()));
+    verify(Token::IdentifierName("bar".to_string()));
+    verify(Token::TemplateTail("".to_string()));
+}

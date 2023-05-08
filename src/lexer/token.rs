@@ -84,4 +84,7 @@ pub(crate) enum Token {
     Number(String),
     Str(String),
     Regular(String),
+    TemplateHead(String),
+    TemplateMiddle(String),
+    TemplateTail(String),
 }
