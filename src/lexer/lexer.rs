@@ -677,6 +677,153 @@ impl<'s> Lexer<'s> {
         Ok(Token::Number(self.get_tokenbuf()))
     }
 
+    /// 解析字符串内容字符
+    ///
+    /// # Returns
+    /// 返回解析是否成功
+    fn parse_string_content(&mut self) -> LexerResultOnlyErr {
+        match self.reader.current() {
+            Some('\u{2028}' | '\u{2029}') => self.savecurrent(1),
+            Some('\\') if matches!(self.reader.lookahead(), Some(chr) if code_points::is_line_terminator(chr)) =>
+            {
+                self.save('\n');
+                self.newline();
+            }
+            Some('\\') => {
+                self.next(1);
+                match self.reader.current() {
+                    Some('\'') => self.savecurrent(1),
+                    Some('\"') => self.savecurrent(1),
+                    Some('\\') => self.savecurrent(1),
+                    Some('b') => self.savenext('\x08'),
+                    Some('f') => self.savenext('\x0c'),
+                    Some('n') => self.savenext('\n'),
+                    Some('r') => self.savenext('\r'),
+                    Some('t') => self.savenext('\t'),
+                    Some('v') => self.savenext('\x0b'),
+                    Some('0') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(10)) =>
+                    {
+                        self.savenext('\0');
+                    }
+                    Some('0') if matches!(self.reader.lookahead(), Some('8' | '9')) => {
+                        self.savenext('\0');
+                    }
+                    Some('0'..='3') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                    {
+                        let mut val = 0u32;
+                        if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
+                            val |= oct;
+                        }
+                        self.next(1);
+
+                        if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
+                            val <<= 3;
+                            val |= oct;
+                        }
+                        self.next(1);
+
+                        if matches!(self.reader.current(), Some(chr) if chr.is_digit(8)) {
+                            if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
+                                val <<= 3;
+                                val |= oct;
+                            }
+                            self.next(1);
+                        }
+
+                        if let Some(chr) = char::from_u32(val) {
+                            self.save(chr);
+                        } else {
+                            return Err(lexer_error::LexerError::new(
+                                self.line_number,
+                                self.line_off,
+                            ));
+                        }
+                    }
+                    Some('4'..='7') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
+                    {
+                        let mut val = 0u32;
+                        for _ in 0..2 {
+                            if let Some(digit) = self.reader.current().and_then(|x| x.to_digit(8)) {
+                                val <<= 3;
+                                val |= digit;
+                            } else {
+                                return Err(lexer_error::LexerError::new(
+                                    self.line_number,
+                                    self.line_off,
+                                ));
+                            }
+                            self.next(1);
+                        }
+                        if let Some(chr) = char::from_u32(val) {
+                            self.save(chr);
+                        } else {
+                            return Err(lexer_error::LexerError::new(
+                                self.line_number,
+                                self.line_off,
+                            ));
+                        }
+                    }
+                    Some('1'..='7') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) => {
+                        if let Some(chr) = self
+                            .reader
+                            .current()
+                            .and_then(|x| x.to_digit(8))
+                            .and_then(|x| char::from_u32(x))
+                        {
+                            self.savenext(chr);
+                        } else {
+                            return Err(lexer_error::LexerError::new(
+                                self.line_number,
+                                self.line_off,
+                            ));
+                        }
+                    }
+                    Some('x') => {
+                        self.next(1);
+
+                        let mut val = 0u32;
+                        for _ in 0..2 {
+                            if let Some(digit) = self.reader.current().and_then(|x| x.to_digit(16))
+                            {
+                                val <<= 4;
+                                val |= digit;
+                            } else {
+                                return Err(lexer_error::LexerError::new(
+                                    self.line_number,
+                                    self.line_off,
+                                ));
+                            }
+                            self.next(1);
+                        }
+                        if let Some(chr) = char::from_u32(val) {
+                            self.save(chr);
+                        } else {
+                            return Err(lexer_error::LexerError::new(
+                                self.line_number,
+                                self.line_off,
+                            ));
+                        }
+                    }
+                    Some('u') => self.parse_unicode_escape_sequence()?,
+                    _ => {
+                        return Err(lexer_error::LexerError::new(
+                            self.line_number,
+                            self.line_off,
+                        ))
+                    }
+                }
+            }
+            Some(chr) => self.savenext(chr),
+            _ => {
+                return Err(lexer_error::LexerError::new(
+                    self.line_number,
+                    self.line_off,
+                ))
+            }
+        }
+        Ok(())
+    }
+
     /// 解析字符串
     ///
     /// StringLiteral ::
@@ -712,149 +859,7 @@ impl<'s> Lexer<'s> {
                 break;
             }
 
-            match self.reader.current() {
-                Some('\u{2028}' | '\u{2029}') => self.savecurrent(1),
-                Some('\\') if matches!(self.reader.lookahead(), Some(chr) if code_points::is_line_terminator(chr)) =>
-                {
-                    self.save('\n');
-                    self.newline();
-                }
-                Some('\\') => {
-                    self.next(1);
-                    match self.reader.current() {
-                        Some('\'') => self.savecurrent(1),
-                        Some('\"') => self.savecurrent(1),
-                        Some('\\') => self.savecurrent(1),
-                        Some('b') => self.savenext('\x08'),
-                        Some('f') => self.savenext('\x0c'),
-                        Some('n') => self.savenext('\n'),
-                        Some('r') => self.savenext('\r'),
-                        Some('t') => self.savenext('\t'),
-                        Some('v') => self.savenext('\x0b'),
-                        Some('0') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(10)) =>
-                        {
-                            self.savenext('\0');
-                        }
-                        Some('0') if matches!(self.reader.lookahead(), Some('8' | '9')) => {
-                            self.savenext('\0');
-                        }
-                        Some('0'..='3') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
-                        {
-                            let mut val = 0u32;
-                            if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
-                                val |= oct;
-                            }
-                            self.next(1);
-
-                            if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8)) {
-                                val <<= 3;
-                                val |= oct;
-                            }
-                            self.next(1);
-
-                            if matches!(self.reader.current(), Some(chr) if chr.is_digit(8)) {
-                                if let Some(oct) = self.reader.current().and_then(|x| x.to_digit(8))
-                                {
-                                    val <<= 3;
-                                    val |= oct;
-                                }
-                                self.next(1);
-                            }
-
-                            if let Some(chr) = char::from_u32(val) {
-                                self.save(chr);
-                            } else {
-                                return Err(lexer_error::LexerError::new(
-                                    self.line_number,
-                                    self.line_off,
-                                ));
-                            }
-                        }
-                        Some('4'..='7') if matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) =>
-                        {
-                            let mut val = 0u32;
-                            for _ in 0..2 {
-                                if let Some(digit) =
-                                    self.reader.current().and_then(|x| x.to_digit(8))
-                                {
-                                    val <<= 3;
-                                    val |= digit;
-                                } else {
-                                    return Err(lexer_error::LexerError::new(
-                                        self.line_number,
-                                        self.line_off,
-                                    ));
-                                }
-                                self.next(1);
-                            }
-                            if let Some(chr) = char::from_u32(val) {
-                                self.save(chr);
-                            } else {
-                                return Err(lexer_error::LexerError::new(
-                                    self.line_number,
-                                    self.line_off,
-                                ));
-                            }
-                        }
-                        Some('1'..='7') if !matches!(self.reader.lookahead(), Some(chr) if chr.is_digit(8)) => {
-                            if let Some(chr) = self
-                                .reader
-                                .current()
-                                .and_then(|x| x.to_digit(8))
-                                .and_then(|x| char::from_u32(x))
-                            {
-                                self.savenext(chr);
-                            } else {
-                                return Err(lexer_error::LexerError::new(
-                                    self.line_number,
-                                    self.line_off,
-                                ));
-                            }
-                        }
-                        Some('x') => {
-                            self.next(1);
-
-                            let mut val = 0u32;
-                            for _ in 0..2 {
-                                if let Some(digit) =
-                                    self.reader.current().and_then(|x| x.to_digit(16))
-                                {
-                                    val <<= 4;
-                                    val |= digit;
-                                } else {
-                                    return Err(lexer_error::LexerError::new(
-                                        self.line_number,
-                                        self.line_off,
-                                    ));
-                                }
-                                self.next(1);
-                            }
-                            if let Some(chr) = char::from_u32(val) {
-                                self.save(chr);
-                            } else {
-                                return Err(lexer_error::LexerError::new(
-                                    self.line_number,
-                                    self.line_off,
-                                ));
-                            }
-                        }
-                        Some('u') => self.parse_unicode_escape_sequence()?,
-                        _ => {
-                            return Err(lexer_error::LexerError::new(
-                                self.line_number,
-                                self.line_off,
-                            ))
-                        }
-                    }
-                }
-                Some(chr) => self.savenext(chr),
-                _ => {
-                    return Err(lexer_error::LexerError::new(
-                        self.line_number,
-                        self.line_off,
-                    ))
-                }
-            }
+            self.parse_string_content()?;
         }
 
         Ok(Token::Str(self.get_tokenbuf()))
