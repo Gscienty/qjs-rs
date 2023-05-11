@@ -47,6 +47,8 @@ pub(crate) enum Token {
     With,
     Yield,
 
+    LineTerminator,
+
     DivAssign,
     Spread,
     LE,

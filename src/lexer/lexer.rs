@@ -330,7 +330,6 @@ impl<'s> Lexer<'s> {
             match self.reader.current() {
                 None => break,
                 Some(chr) if code_points::is_line_terminator(chr) => {
-                    self.newline();
                     break;
                 }
                 Some(chr) => self.savenext(chr),
@@ -1350,7 +1349,7 @@ impl<'s> Lexer<'s> {
                 // 换行
                 Some(chr) if code_points::is_line_terminator(chr) => {
                     self.newline();
-                    continue;
+                    return Ok(Token::LineTerminator);
                 }
 
                 // White Space
